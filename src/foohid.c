@@ -28,6 +28,13 @@
 #define TESTCHANNEL 2
 #define CHANNELMAXIMUM 1022
 
+
+#define IBUS_HEADERBYTES 2
+#define IBUS_HEADERBYTE_A 0x20
+#define IBUS_HEADERBYTE_B 0x40
+#define IBUS_CHANNELS 14
+
+
 #define FOOHID_NAME "it_unbit_foohid"
 #define FOOHID_CREATE 0
 #define FOOHID_DESTROY 1
@@ -137,8 +144,8 @@ static void foohidClose() {
     }
 }
 
-static void foohidSend(uint16_t *data) {
-    for (int i = 0; i < CHANNELS; i++) {
+static void foohidSend(uint16_t *data, int channels, bool raw_ibus) {
+    for (int i = 0; i < channels; i++) {
         if (data[i] > CHANNELMAXIMUM) {
             data[i] = CHANNELMAXIMUM;
         }
@@ -176,9 +183,14 @@ static void signalHandler(int signo) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        printf("Usage:\n\t%s /dev/serial_port\n", argv[0]);
+    bool raw_ibus = false;
+
+    if (!(argc == 2 || argc == 3)) {
+        printf("Usage:\n\t%s /dev/serial_port <raw serial ibus>\n", argv[0]);
         return 1;
+    }
+    if (argc == 3) {
+        raw_ibus = true;
     }
 
     printf("Opening serial port...\n");
@@ -200,71 +212,140 @@ int main(int argc, char* argv[]) {
 
     printf("Entering main-loop...\n");
 
-    while (running != 0) {
-        if (serialHasChar(fd)) {
-            unsigned char c1;
-            serialReadChar(fd, (char*)&c1);
-            if (c1 == HEADERBYTE_A) {
-                // Found first byte of protocol start
-                while (!serialHasChar(fd)) {
-                    if (running == 0) {
-                        serialClose(fd);
-                        return 0;
-                    }
-                }
+    if (raw_ibus) {
+        enum {HDR_A, HDR_B, INT_LO, INT_HI, CHECK_A, CHECK_B} state = HDR_A;
+        uint16_t vals[IBUS_CHANNELS];
+        int channel = 0;
+        unsigned int chksum;
+        unsigned int wire_checksum;
 
-                unsigned char c2;
-                serialReadChar(fd, (char*)&c2);
-                if (c2 == HEADERBYTE_B) {
-                    // Protocol start has been found, read payload
-                    unsigned char data[PAYLOADBYTES];
-                    int read = 0;
-                    while ((read < PAYLOADBYTES) && (running != 0)) {
-                        read += serialReadRaw(fd, (char*)data + read, PAYLOADBYTES - read);
-                    }
+        const int buffer_size = 1000;
+        unsigned char buffer[buffer_size];
 
-                    // Read 16bit checksum
-                    unsigned char checksumData[CHECKSUMBYTES];
-                    read = 0;
-                    while ((read < CHECKSUMBYTES) && (running != 0)) {
-                        read += serialReadRaw(fd, (char*)checksumData + read,
-                                CHECKSUMBYTES - read);
-                    }
+        while (running != 0) {
+            if (!serialHasChar(fd, 1)) {
+                continue;
+            }
+            int bread = read(fd, buffer, buffer_size);
 
-                    // Check if checksum matches
-                    uint16_t checksum = 0;
-                    for (int i = 0; i < PAYLOADBYTES; i++) {
-                        checksum += data[i];
-                    }
+            for (int ii = 0; ii < bread; ii++) {
+                unsigned char cc = buffer[ii];
 
-                    if (checksum != ((checksumData[0] << 8) | checksumData[1])) {
-                        printf("Wrong checksum: %d != %d\n",
-                                checksum, ((checksumData[0] << 8) | checksumData[1]));
+                switch (state) {
+                case HDR_A:
+                    if (cc == IBUS_HEADERBYTE_A) {
+                        state = HDR_B;
+                        chksum = 0xFFFF;
+                        chksum -= cc;
+                    }
+                    break;
+                case HDR_B:
+                    if (cc == IBUS_HEADERBYTE_B) {
+                        state = INT_LO;
+                        chksum -= cc;
                     } else {
-                        // Decode channel values
-                        uint16_t buff[CHANNELS + 1];
-                        for (int i = 0; i < (CHANNELS + 1); i++) {
-                            buff[i] = data[2 * i] << 8;
-                            buff[i] |= data[(2 * i) + 1];
-
-                            if (i < CHANNELS) {
-                                buff[i] -= 1000;
-                            }
-                        }
-
-                        // Check Test Channel Value
-                        if (buff[CHANNELS] != buff[TESTCHANNEL]) {
-                            printf("Wrong test channel value: %d != %d\n",
-                                   buff[CHANNELS], buff[TESTCHANNEL]);
-                        }
-
-                        foohidSend(buff);
+                        state = HDR_A;
                     }
+                    channel = 0;
+                    break;
+                case INT_LO:
+                    vals[channel] = cc;
+                    chksum -= cc;
+                    state = INT_HI;
+                    break;
+                case INT_HI:
+                    vals[channel++] |= ((int)cc) << 8;
+                    chksum -= cc;
+                    if (channel == IBUS_CHANNELS) {
+                        state = CHECK_A;
+                    } else {
+                        state = INT_LO;
+                    }
+                    break;
+                case CHECK_A:
+                    wire_checksum = cc;
+                    state = CHECK_B;
+                    break;
+                case CHECK_B:
+                    wire_checksum |= ((int)cc) << 8;
+                    if (wire_checksum == chksum) {
+                        foohidSend(vals, IBUS_CHANNELS, raw_ibus);
+
+                    } else {
+                        printf("bad checksum wire checksump %04x, checksum %04x\n", wire_checksum, chksum);
+                    }
+                    state = HDR_A;
+                    chksum = 0xFFFF;
+                    break;
                 }
             }
         }
+    } else {
+        while (running != 0) {
+            if (serialHasChar(fd, 0)) {
+                unsigned char c1;
+                serialReadChar(fd, (char*)&c1);
+                if (c1 == HEADERBYTE_A) {
+                    // Found first byte of protocol start
+                    while (!serialHasChar(fd, 0)) {
+                        if (running == 0) {
+                            serialClose(fd);
+                            return 0;
+                        }
+                    }
 
-        usleep(1000);
+                    unsigned char c2;
+                    serialReadChar(fd, (char*)&c2);
+                    if (c2 == HEADERBYTE_B) {
+                        // Protocol start has been found, read payload
+                        unsigned char data[PAYLOADBYTES];
+                        int read = 0;
+                        while ((read < PAYLOADBYTES) && (running != 0)) {
+                            read += serialReadRaw(fd, (char*)data + read, PAYLOADBYTES - read);
+                        }
+
+                        // Read 16bit checksum
+                        unsigned char checksumData[CHECKSUMBYTES];
+                        read = 0;
+                        while ((read < CHECKSUMBYTES) && (running != 0)) {
+                            read += serialReadRaw(fd, (char*)checksumData + read,
+                                    CHECKSUMBYTES - read);
+                        }
+
+                        // Check if checksum matches
+                        uint16_t checksum = 0;
+                        for (int i = 0; i < PAYLOADBYTES; i++) {
+                            checksum += data[i];
+                        }
+
+                        if (checksum != ((checksumData[0] << 8) | checksumData[1])) {
+                            printf("Wrong checksum: %d != %d\n",
+                                    checksum, ((checksumData[0] << 8) | checksumData[1]));
+                        } else {
+                            // Decode channel values
+                            uint16_t buff[CHANNELS + 1];
+                            for (int i = 0; i < (CHANNELS + 1); i++) {
+                                buff[i] = data[2 * i] << 8;
+                                buff[i] |= data[(2 * i) + 1];
+
+                                if (i < CHANNELS) {
+                                    buff[i] -= 1000;
+                                }
+                            }
+
+                            // Check Test Channel Value
+                            if (buff[CHANNELS] != buff[TESTCHANNEL]) {
+                                printf("Wrong test channel value: %d != %d\n",
+                                       buff[CHANNELS], buff[TESTCHANNEL]);
+                            }
+
+                            foohidSend(buff, CHANNELS, raw_ibus);
+                        }
+                    }
+                }
+            }
+            usleep(1000);
+        } 
     }
 
     printf("Closing serial port...\n");

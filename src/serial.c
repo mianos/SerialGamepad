@@ -105,14 +105,18 @@ int serialOpen(const char *port, unsigned int baud) {
 
 void serialClose(int fd) {
     tcflush(fd, TCIOFLUSH);
+    printf("Flushed\n");
+    while (serialHasChar(fd, 0))
+        ;
+    printf("consumed\n");
     close(fd);
 }
 
-int serialHasChar(int fd) {
+int serialHasChar(int fd, int timeout) {
     struct pollfd fds;
     fds.fd = fd;
     fds.events = (POLLIN | POLLPRI); // Data may be read
-    if (poll(&fds, 1, 0) > 0) {
+    if (poll(&fds, 1, timeout) > 0) {
         return 1;
     } else {
         return 0;

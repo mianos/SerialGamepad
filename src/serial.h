@@ -117,7 +117,7 @@ void serialWaitUntilSent(int fd);
  * \param fd file handle of port to check
  * \returns 1 if a character is available, 0 if not
  */
-int serialHasChar(int fd);
+int serialHasChar(int fd, int timeout);
 
 /*!
  * \brief read a single character

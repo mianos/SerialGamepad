@@ -12,13 +12,14 @@ CFLAGS ?= -Wall -pedantic -std=c11
 .PHONY: all install distribute clean
 
 # Build all binaries
-all: bin/protocol bin/foohid build/Release/SerialGamepad.app
+all: bin/protocol bin/protocol_ibus bin/foohid build/Release/SerialGamepad.app
 	@rm -rf bin/SerialGamepad.app
 	@cp -R build/Release/SerialGamepad.app bin/SerialGamepad.app
 
 # Install locally
 install: bin/protocol bin/foohid build/Release/SerialGamepad.app
 	cp bin/protocol /usr/local/bin/serial-protocol
+	cp bin/protocol_ibus /usr/local/bin/serial-protocol-ibus
 	cp bin/foohid /usr/local/bin/foohid
 	@rm -rf /Applications/SerialGamepad.app
 	cp -r build/Release/SerialGamepad.app /Applications/SerialGamepad.app
@@ -31,6 +32,11 @@ build/Release/SerialGamepad.app: SerialGamepad SerialGamepad.xcodeproj
 bin/protocol: src/serial.o src/protocol.o
 	@mkdir -p bin
 	$(CC) -o bin/protocol src/serial.o src/protocol.o
+
+bin/protocol_ibus: src/serial.o src/protocol_ibus.o
+	@mkdir -p bin
+	$(CC) -o bin/protocol_ibus src/protocol_ibus.o src/serial.o
+
 
 # Build foohid binary
 bin/foohid: src/serial.o src/foohid.o

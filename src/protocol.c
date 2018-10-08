@@ -43,18 +43,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    printf("port open ...\n");
+
     if (signal(SIGINT, signalHandler) == SIG_ERR) {
         perror("Couldn't register signal handler");
         return 1;
     }
 
+    printf("opened ...\n");
     while (running != 0) {
-        if (serialHasChar(fd)) {
+        if (serialHasChar(fd, 1)) {
             unsigned char c1;
             serialReadChar(fd, (char*)&c1);
+            printf("read %2x (%2d)\n", c1, c1);
             if (c1 == HEADERBYTE_A) {
                 // Found first byte of protocol start
-                while (!serialHasChar(fd)) {
+                while (!serialHasChar(fd, 1)) {
                     if (running == 0) {
                         serialClose(fd);
                         return 0;
@@ -117,8 +121,6 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-
-        usleep(1000);
     }
 
     printf("Closing serial port...                    \n");
