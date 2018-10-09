@@ -158,7 +158,6 @@ static void foohidSend(uint16_t *data, int channels, bool raw_ibus) {
     gamepad.aux1 = data[4] - 511;
     gamepad.aux2 = data[5] - 511;
 
-    /*
     printf("Sending data packet:\n");
     printf("Left X: %d\n", gamepad.leftX);
     printf("Left Y: %d\n", gamepad.leftY);
@@ -166,7 +165,6 @@ static void foohidSend(uint16_t *data, int channels, bool raw_ibus) {
     printf("Right Y: %d\n", gamepad.rightY);
     printf("Aux 1: %d\n", gamepad.aux1);
     printf("Aux 2: %d\n", gamepad.aux2);
-    */
 
     input[2] = (uint64_t)&gamepad;
     input[3] = sizeof(struct gamepad_report_t);
