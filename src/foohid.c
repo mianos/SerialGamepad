@@ -9,9 +9,11 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
+#include <getopt.h>
 
 #include <IOKit/IOKitLib.h>
 
@@ -60,6 +62,9 @@ static io_connect_t connect;
 static uint64_t input[input_count];
 static struct gamepad_report_t gamepad;
 
+bool debug = false;
+bool raw_ibus = false;
+
 /*
  * This is my USB HID Descriptor for this emulated Gamepad.
  * For more informations refer to:
@@ -95,7 +100,7 @@ static int foohidInit() {
                             IOServiceMatching(FOOHID_NAME), &iterator);
     if (ret != KERN_SUCCESS) {
         printf("Unable to access foohid IOService\n");
-        return 1;
+        exit(1);
     }
 
     int found = 0;
@@ -109,7 +114,7 @@ static int foohidInit() {
     IOObjectRelease(iterator);
     if (!found) {
         printf("Unable to open foohid IOService\n");
-        return 1;
+        exit(1);
     }
 
     printf("Creating virtual HID device...\n");
@@ -129,7 +134,7 @@ static int foohidInit() {
     ret = IOConnectCallScalarMethod(connect, FOOHID_CREATE, input, input_count, NULL, 0);
     if (ret != KERN_SUCCESS) {
         printf("Unable to create virtual HID device\n");
-        return 1;
+        exit(1);
     }
 
     return 0;
@@ -145,33 +150,42 @@ static void foohidClose() {
 }
 
 static void foohidSend(uint16_t *data, int channels, bool raw_ibus) {
-    for (int i = 0; i < channels; i++) {
-        if (data[i] > CHANNELMAXIMUM) {
-            data[i] = CHANNELMAXIMUM;
+    if (raw_ibus) {
+        //values go from 1000 - 2000
+        gamepad.leftX = data[3] - 1500;
+        gamepad.leftY = data[2] - 1500;
+        gamepad.rightX = data[0] - 1500;
+        gamepad.rightY = data[1] - 1500;
+        gamepad.aux1 = data[4] - 1500;
+        gamepad.aux2 = data[5] - 1500;
+    } else {
+        for (int i = 0; i < channels; i++) {
+            if (data[i] > CHANNELMAXIMUM) {
+                data[i] = CHANNELMAXIMUM;
+            }
         }
+        gamepad.leftX = data[3] - 511;
+        gamepad.leftY = data[2] - 511;
+        gamepad.rightX = data[0] - 511;
+        gamepad.rightY = data[1] - 511;
+        gamepad.aux1 = data[4] - 511;
+        gamepad.aux2 = data[5] - 511;
     }
 
-    gamepad.leftX = data[3] - 511;
-    gamepad.leftY = data[2] - 511;
-    gamepad.rightX = data[0] - 511;
-    gamepad.rightY = data[1] - 511;
-    gamepad.aux1 = data[4] - 511;
-    gamepad.aux2 = data[5] - 511;
-
-    printf("Sending data packet:\n");
-    printf("Left X: %d\n", gamepad.leftX);
-    printf("Left Y: %d\n", gamepad.leftY);
-    printf("Right X: %d\n", gamepad.rightX);
-    printf("Right Y: %d\n", gamepad.rightY);
-    printf("Aux 1: %d\n", gamepad.aux1);
-    printf("Aux 2: %d\n", gamepad.aux2);
-
-    input[2] = (uint64_t)&gamepad;
-    input[3] = sizeof(struct gamepad_report_t);
-
-    kern_return_t ret = IOConnectCallScalarMethod(connect, FOOHID_SEND, input, 4, NULL, 0);
-    if (ret != KERN_SUCCESS) {
-        printf("Unable to send packet to virtual HID device\n");
+    if (!debug) {
+        input[2] = (uint64_t)&gamepad;
+        input[3] = sizeof(struct gamepad_report_t);
+        kern_return_t ret = IOConnectCallScalarMethod(connect, FOOHID_SEND, input, 4, NULL, 0);
+        if (ret != KERN_SUCCESS) {
+            fprintf(stderr, "Unable to send packet to virtual HID device\n");
+        }
+    } else {
+        printf("Left X: %4d ", gamepad.leftX);
+        printf("Left Y: %4d ", gamepad.leftY);
+        printf("Right X: %4d ", gamepad.rightX);
+        printf("Right Y: %4d ", gamepad.rightY);
+        printf("Aux 1: %4d ", gamepad.aux1);
+        printf("Aux 2: %4d\n", gamepad.aux2);
     }
 }
 
@@ -181,28 +195,45 @@ static void signalHandler(int signo) {
 }
 
 int main(int argc, char* argv[]) {
-    bool raw_ibus = false;
+    char *serial_port = NULL;
 
-    if (!(argc == 2 || argc == 3)) {
-        printf("Usage:\n\t%s /dev/serial_port <raw serial ibus>\n", argv[0]);
-        return 1;
+    int opt;
+
+    while ((opt = getopt(argc, argv, "p:di")) != EOF) {
+        switch (opt) {
+        case 'p':
+            serial_port = optarg;
+            break;
+        case 'd':
+            debug = true;
+            break;
+        case 'i':
+            raw_ibus = true;
+            break;
+        }
     }
-    if (argc == 3) {
-        raw_ibus = true;
+    if (serial_port == NULL) {
+        fprintf(stderr, "Serial port -p <port> must be specified\n");
+        exit(1);
     }
 
     printf("Opening serial port...\n");
 
-    int fd = serialOpen(argv[1], BAUDRATE);
+    int fd = serialOpen(serial_port, BAUDRATE);
     if (fd == -1) {
-        return 1;
+        fprintf(stderr, "failed to open serial port\n");
+        exit(1);
     }
-
-    if (foohidInit() != 0) {
-        serialClose(fd);
-        return 1;
+ 
+    if (!debug) {
+        if (foohidInit() != 0) {
+            serialClose(fd);
+            fprintf(stderr, "failed to init foohid\n");
+            exit(1);
+        }
+    } else {
+        printf("Debug mode, no driver\n");
     }
-
     if (signal(SIGINT, signalHandler) == SIG_ERR) {
         perror("Couldn't register signal handler");
         return 1;
@@ -268,7 +299,6 @@ int main(int argc, char* argv[]) {
                     wire_checksum |= ((int)cc) << 8;
                     if (wire_checksum == chksum) {
                         foohidSend(vals, IBUS_CHANNELS, raw_ibus);
-
                     } else {
                         printf("bad checksum wire checksump %04x, checksum %04x\n", wire_checksum, chksum);
                     }
@@ -348,7 +378,9 @@ int main(int argc, char* argv[]) {
 
     printf("Closing serial port...\n");
     serialClose(fd);
-    foohidClose();
+    if (!debug) {
+        foohidClose();
+    }
 
     return 0;
 }
