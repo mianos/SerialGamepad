@@ -1,5 +1,10 @@
 # Mac OS X Gamepad Driver for Flysky compatible transmitters
 
+## This version includes a flysky serial protocol decoder.
+
+Connect a flysky receiver to a serial to USB converter and the iBus protocol
+data is sent into the joystick emulator.
+
 This project emulates a virtual Gamepad using input data from a serial port. This can be used to enable Flysky CT6A / CT6B compatible transmitters (Turbobrix, Exceed, Modelcraft) in games or simulators.
 
 ####This software has been tested on the following versions of OS X: 
